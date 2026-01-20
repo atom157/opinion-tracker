@@ -28,27 +28,11 @@ function OpinionPortfolioTracker() {
         setSuccess('');
 
         try {
-            const posResponse = await fetch(
-                `https://openapi.opinion.trade/openapi/positions/user/${address}?limit=50`,
-                {
-                    headers: {
-                        'apikey': 'ehtBldzeqaB88gW0YeWcz6ku5M2R9KO8',
-                        'Accept': 'application/json'
-                    }
-                }
-            );
+            const posResponse = await fetch(`/api/positions?address=${address}&limit=50`);
             if (!posResponse.ok) throw new Error(`Помилка: ${posResponse.status}`);
             const posData = await posResponse.json();
 
-            const tradesResponse = await fetch(
-                `https://openapi.opinion.trade/openapi/trade/user/${address}?limit=100`,
-                {
-                    headers: {
-                        'apikey': 'ehtBldzeqaB88gW0YeWcz6ku5M2R9KO8',
-                        'Accept': 'application/json'
-                    }
-                }
-            );
+            const tradesResponse = await fetch(`/api/trades?address=${address}&limit=100`);
             if (!tradesResponse.ok) throw new Error(`Помилка трейдів: ${tradesResponse.status}`);
             const tradesData = await tradesResponse.json();
 
@@ -86,15 +70,7 @@ function OpinionPortfolioTracker() {
         
         for (const marketId of marketIds.slice(0, 10)) {
             try {
-                const response = await fetch(
-                    `https://openapi.opinion.trade/openapi/market/${marketId}`,
-                    {
-                        headers: {
-                            'apikey': 'ehtBldzeqaB88gW0YeWcz6ku5M2R9KO8',
-                            'Accept': 'application/json'
-                        }
-                    }
-                );
+                const response = await fetch(`/api/market?id=${marketId}`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.code === 0 && data.result) {
