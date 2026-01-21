@@ -1,4 +1,4 @@
-const { useState } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
 function OpinionPortfolioTracker() {
   const [walletAddress, setWalletAddress] = useState("");
@@ -16,6 +16,14 @@ function OpinionPortfolioTracker() {
     activePositions: 0,
     totalTrades: 0,
   });
+
+  // Chart canvas refs
+  const volumeChartRef = useRef(null);
+  const sideChartRef = useRef(null);
+  const categoryChartRef = useRef(null);
+  // Keep Chart.js instances to destroy/recreate cleanly
+  const chartsRef = useRef({});
+
 
   const isValidEvmAddress = (a) => /^0x[a-fA-F0-9]{40}$/.test(a);
 
