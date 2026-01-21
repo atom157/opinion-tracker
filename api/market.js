@@ -1,42 +1,43 @@
-import { handleOptions, getApiKey, fetchJson, ok, fail } from "./_utils.js";
+export default async function handler(req, res) {
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
-export default async function handler(req, res){
-  if (handleOptions(req, res)) return;
+  const { id } = req.query;
+  
+  if (!id) {
+    return res.status(400).json({ error: 'Market ID is required' });
+  }
 
-  const marketId = (req.query.marketId || req.query.id || "").toString().trim();
-  if (!marketId) return fail(res, 400, "Market ID is required. Use ?marketId=123");
-  const apiKey = getApiKey();
-
-  const base = "https://openapi.opinion.trade/openapi/market";
-  const url1 = `${base}/${encodeURIComponent(marketId)}`;
-  const url2 = `${base}/categorical/${encodeURIComponent(marketId)}`;
-
-  try{
-    // Try binary first
-    let r1 = await fetchJson(url1, apiKey);
-    let j1 = r1.json;
-
-    if (j1 && typeof j1 === "object" && "code" in j1 && j1.code !== 0){
-      // fallback to categorical
-      const r2 = await fetchJson(url2, apiKey);
-      const j2 = r2.json;
-      if (j2 && typeof j2 === "object" && "code" in j2){
-        if (j2.code === 0) return ok(res, { errno: 0, errmsg: "", result: j2.data });
-        return ok(res, { errno: j2.code, errmsg: j2.msg || "Request failed", result: null });
+  try {
+    console.log(`Fetching market data for ID: ${id}`);
+    const response = await fetch(
+      `https://openapi.opinion.trade/openapi/market/${id}`,
+      {
+        headers: {
+          'apikey': 'ehtBldzeqaB88gW0YeWcz6ku5M2R9KO8',
+          'Accept': 'application/json'
+        }
       }
-      if (r2.status >= 200 && r2.status < 300) return ok(res, j2);
-      return fail(res, r2.status, "Upstream request failed", { upstream: j2 });
+    );
+
+    if (!response.ok) {
+      throw new Error(`API returned ${response.status}: ${response.statusText}`);
     }
 
-    if (j1 && typeof j1 === "object" && "code" in j1){
-      if (j1.code === 0) return ok(res, { errno: 0, errmsg: "", result: j1.data });
-      return ok(res, { errno: j1.code, errmsg: j1.msg || "Request failed", result: null });
-    }
-
-    if (r1.status >= 200 && r1.status < 300) return ok(res, j1);
-    return fail(res, r1.status, "Upstream request failed", { upstream: j1 });
-
-  } catch (e){
-    return fail(res, 500, e?.message || "Server error");
+    const data = await response.json();
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error('Market API error:', error);
+    return res.status(500).json({ 
+      error: error.message,
+      code: -1,
+      result: null
+    });
   }
 }
