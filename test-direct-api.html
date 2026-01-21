@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Opinion Portfolio Tracker - Test Direct API</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState } = React;
+
+        function OpinionPortfolioTracker() {
+            const [walletAddress, setWalletAddress] = useState('');
+            const [inputAddress, setInputAddress] = useState('');
+            const [positions, setPositions] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            // ⚠️ ТЕСТОВА ВЕРСІЯ - прямі запити до API (може не працювати через CORS)
+            const API_KEY = 'ehtBldzeqaB88gW0YeWcz6ku5M2R9KO8';
+            const BASE_URL = 'https://openapi.opinion.trade/openapi';
+
+            const fetchData = async (address) => {
+                if (!address || address.length < 10) {
+                    setError('Введіть валідну адресу');
+                    return;
+                }
+
+                setLoading(true);
+                setError('');
+
+                try {
+                    console.log('🔍 Testing direct API call to:', `${BASE_URL}/positions/user/${address}`);
+                    
+                    const response = await fetch(`${BASE_URL}/positions/user/${address}?limit=50`, {
+                        headers: {
+                            'apikey': API_KEY,
+                            'Accept': 'application/json'
+                        }
+                    });
+
+                    console.log('📡 Response status:', response.status);
+                    console.log('📡 Response headers:', [...response.headers.entries()]);
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+                    console.log('✅ Data received:', data);
+
+                    if (data.code === 0 && data.result) {
+                        const posList = data.result.list || [];
+                        setPositions(posList);
+                        setWalletAddress(address);
+                        
+                        if (posList.length === 0) {
+                            setError('ℹ️ Гаманець знайдено, але немає позицій');
+                        }
+                    } else {
+                        setError(`⚠️ API відповів: code=${data.code}, msg=${data.msg || 'Unknown'}`);
+                    }
+                } catch (err) {
+                    console.error('❌ Error:', err);
+                    setError(`❌ ${err.message}`);
+                    
+                    if (err.message.includes('CORS')) {
+                        setError('❌ CORS Error - потрібен бекенд проксі! Використовуйте Vercel деплой.');
+                    }
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black p-8">
+                    <div className="max-w-4xl mx-auto">
+                        <div className="text-center mb-8">
+                            <h1 className="text-4xl font-bold text-white mb-2">
+                                🧪 Test Direct API
+                            </h1>
+                            <p className="text-orange-300">
+                                Ця версія намагається звернутись до API напряму (може не працювати через CORS)
+                            </p>
+                        </div>
+
+                        <div className="bg-gray-800 rounded-2xl p-6 mb-6">
+                            <div className="flex gap-3">
+                                <input
+                                    type="text"
+                                    placeholder="Введіть адресу гаманця (0x...)"
+                                    value={inputAddress}
+                                    onChange={(e) => setInputAddress(e.target.value)}
+                                    onKeyPress={(e) => e.key === 'Enter' && fetchData(inputAddress)}
+                                    className="flex-1 px-4 py-3 rounded-lg bg-gray-900 text-white border border-orange-500/30"
+                                />
+                                <button
+                                    onClick={() => fetchData(inputAddress)}
+                                    disabled={loading}
+                                    className="px-6 py-3 bg-orange-500 hover:bg-orange-600 rounded-lg font-semibold disabled:opacity-50"
+                                >
+                                    {loading ? '⏳' : '🔍'} Пошук
+                                </button>
+                            </div>
+
+                            {error && (
+                                <div className="mt-4 p-4 bg-red-500/20 border border-red-500 rounded-lg text-red-300">
+                                    {error}
+                                </div>
+                            )}
+
+                            {walletAddress && !error && (
+                                <div className="mt-4 p-4 bg-green-500/20 border border-green-500 rounded-lg text-green-300">
+                                    ✅ Знайдено {positions.length} позицій
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="bg-gray-800 rounded-2xl p-6">
+                            <h2 className="text-2xl font-bold text-white mb-4">📋 Console Debug Info</h2>
+                            <div className="bg-gray-900 p-4 rounded-lg text-sm text-gray-300 font-mono overflow-auto max-h-96">
+                                <p>🔗 API Endpoint: {BASE_URL}/positions/user/[ADDRESS]</p>
+                                <p>🔑 API Key: {API_KEY.substring(0, 10)}...</p>
+                                <p>📍 Статус: {loading ? '⏳ Завантаження...' : '✅ Готово'}</p>
+                                <p className="mt-4">💡 Відкрийте DevTools Console (F12) для деталей</p>
+                                {positions.length > 0 && (
+                                    <pre className="mt-4 text-xs">
+                                        {JSON.stringify(positions[0], null, 2).substring(0, 500)}...
+                                    </pre>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="mt-6 p-4 bg-blue-500/20 border border-blue-500 rounded-lg text-blue-300">
+                            <h3 className="font-bold mb-2">ℹ️ Важливо:</h3>
+                            <ul className="list-disc list-inside space-y-1 text-sm">
+                                <li>Ця версія для тестування - може не працювати через CORS</li>
+                                <li>Для продакшену використовуйте Vercel з API routes</li>
+                                <li>Всі запити логуються в Console (F12)</li>
+                                <li>Якщо бачите CORS error - все ОК, просто задеплойте на Vercel</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<OpinionPortfolioTracker />);
+    </script>
+</body>
+</html>

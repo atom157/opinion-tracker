@@ -28,37 +28,74 @@ function OpinionPortfolioTracker() {
         setSuccess('');
 
         try {
+            console.log('Fetching data for address:', address);
+            
+            // Fetch positions
             const posResponse = await fetch(`/api/positions?address=${address}&limit=50`);
-            if (!posResponse.ok) throw new Error(`Помилка: ${posResponse.status}`);
+            console.log('Positions response status:', posResponse.status);
+            
+            if (!posResponse.ok) {
+                throw new Error(`Помилка позицій: ${posResponse.status} ${posResponse.statusText}`);
+            }
+            
             const posData = await posResponse.json();
+            console.log('Positions data:', posData);
 
+            // Fetch trades
             const tradesResponse = await fetch(`/api/trades?address=${address}&limit=100`);
-            if (!tradesResponse.ok) throw new Error(`Помилка трейдів: ${tradesResponse.status}`);
+            console.log('Trades response status:', tradesResponse.status);
+            
+            if (!tradesResponse.ok) {
+                throw new Error(`Помилка трейдів: ${tradesResponse.status} ${tradesResponse.statusText}`);
+            }
+            
             const tradesData = await tradesResponse.json();
+            console.log('Trades data:', tradesData);
 
+            // Process positions
             if (posData.code === 0 && posData.result) {
                 const posList = posData.result.list || [];
                 setPositions(posList);
-                await fetchMarketDetails(posList);
-                setSuccess(`✅ Завантажено ${posList.length} позицій`);
+                
+                if (posList.length > 0) {
+                    await fetchMarketDetails(posList);
+                    setSuccess(`✅ Завантажено ${posList.length} позицій`);
+                } else {
+                    setSuccess('✅ Дані завантажено (немає активних позицій)');
+                }
             } else {
+                console.warn('No positions found or invalid response:', posData);
                 setPositions([]);
             }
 
+            // Process trades
             if (tradesData.code === 0 && tradesData.result) {
                 const tradesList = tradesData.result.list || [];
                 setTrades(tradesList);
                 calculateStats(posData.result?.list || [], tradesList);
+                
+                if (tradesList.length === 0 && posData.result?.list?.length === 0) {
+                    setSuccess('✅ Гаманець знайдено, але немає активності');
+                }
             } else {
+                console.warn('No trades found or invalid response:', tradesData);
                 setTrades([]);
+                calculateStats(posData.result?.list || [], []);
             }
 
             setWalletAddress(address);
         } catch (err) {
             console.error('API Error:', err);
-            setError(err.message || 'Помилка завантаження даних');
+            setError(`❌ ${err.message || 'Помилка завантаження даних'}`);
             setPositions([]);
             setTrades([]);
+            setStats({
+                totalValue: 0,
+                totalPnL: 0,
+                winRate: 0,
+                activePositions: 0,
+                totalTrades: 0
+            });
         } finally {
             setLoading(false);
         }
