@@ -53,7 +53,7 @@ function OpinionPortfolioTracker() {
             console.log('Trades data:', tradesData);
 
             // Process positions
-            if (posData.code === 0 && posData.result) {
+                if ((posData.errno === 0 || posData.code === 0) && posData.result) {
                 const posList = posData.result.list || [];
                 setPositions(posList);
                 
@@ -69,7 +69,7 @@ function OpinionPortfolioTracker() {
             }
 
             // Process trades
-            if (tradesData.code === 0 && tradesData.result) {
+            if (tradesData.code === 0 && tradeif ((tradesData.errno === 0 || tradesData.code === 0) && tradesData.result) {sData.result) {
                 const tradesList = tradesData.result.list || [];
                 setTrades(tradesList);
                 calculateStats(posData.result?.list || [], tradesList);
