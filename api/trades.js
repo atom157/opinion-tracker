@@ -1,44 +1,27 @@
 export default async function handler(req, res) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  const { address, limit = 100 } = req.query;
-  
-  if (!address) {
-    return res.status(400).json({ error: 'Address is required' });
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    console.log(`Fetching trades for address: ${address}`);
-    const response = await fetch(
-      `https://openapi.opinion.trade/openapi/trade/user/${address}?limit=${limit}`,
-      {
-        headers: {
-          'apikey': 'ehtBldzeqaB88gW0YeWcz6ku5M2R9KO8',
-          'Accept': 'application/json'
-        }
-      }
-    );
+    const { address, limit = '500' } = req.query || {};
+    if (!address) return res.status(400).json({ error: 'Wallet address is required' });
+
+    const isValid = /^0x[a-fA-F0-9]{40}$/.test(address);
+    if (!isValid) return res.status(400).json({ error: 'Invalid address format' });
+
+    const url = `https://openapi.opinion.trade/openapi/trade/user/${address}?limit=${encodeURIComponent(limit)}`;
+    const response = await fetch(url, { headers: { accept: 'application/json' } });
 
     if (!response.ok) {
-      throw new Error(`API returned ${response.status}: ${response.statusText}`);
+      const text = await response.text().catch(() => '');
+      return res.status(response.status).json({ error: `Upstream error: ${response.status}`, details: text });
     }
 
     const data = await response.json();
-    console.log(`Trades response:`, data);
     return res.status(200).json(data);
-  } catch (error) {
-    console.error('Trades API error:', error);
-    return res.status(500).json({ 
-      error: error.message,
-      code: -1,
-      result: null
-    });
+  } catch (e) {
+    return res.status(500).json({ error: 'Server error', details: String(e?.message || e) });
   }
 }
