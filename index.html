@@ -1,169 +1,60 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Opinion Portfolio Tracker</title>
-  <meta name="description" content="Track your Opinion Protocol portfolio on BNB Chain with real-time data."/>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Opinion Portfolio Tracker</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+        
+  background: #000 url('image-fon.png') center center / cover no-repeat fixed;
+}
+    
+.analytics-card{
+  margin-top: 22px;
+  background: rgba(15, 18, 26, 0.72);
+  border: 1px solid rgba(255, 120, 0, 0.20);
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+  backdrop-filter: blur(16px);
+}
+.charts-grid{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+}
+.chart-box{
+  background: rgba(10, 12, 18, 0.55);
+  border: 1px solid rgba(255, 120, 0, 0.14);
+  border-radius: 14px;
+  padding: 14px;
+}
+.chart-box-wide{ grid-column: 1 / -1; }
+.chart-title{
+  font-weight: 600;
+  color: rgba(255,255,255,0.88);
+  margin-bottom: 10px;
+  letter-spacing: 0.2px;
+}
+@media (max-width: 900px){
+  .charts-grid{ grid-template-columns: 1fr; }
+  .chart-box-wide{ grid-column: auto; }
+}
 
-  <style>
-    :root{
-      --bg0:#07090d;
-      --bg1:#0b0f17;
-      --card:#0e1421cc;
-      --line:#1b263a;
-      --text:#e8eefc;
-      --muted:#9aa7bd;
-      --orange:#ff7a18;
-      --orange2:#ff9a3d;
-      --green:#2ee58a;
-      --red:#ff4d4d;
-    }
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0;
-      font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      color:var(--text);
-      background:
-        radial-gradient(1200px 600px at 50% -200px, rgba(255,122,24,.25), transparent 60%),
-        radial-gradient(800px 500px at 15% 20%, rgba(255,154,61,.12), transparent 55%),
-        radial-gradient(900px 650px at 85% 30%, rgba(80,120,255,.08), transparent 60%),
-        linear-gradient(180deg, var(--bg0), var(--bg1));
-      overflow-x:hidden;
-    }
-    a{color:inherit}
-    .container{max-width:1100px;margin:0 auto;padding:28px 18px 60px}
-    .hero{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;margin-top:6px;margin-bottom:18px;text-align:center}
-    .brand{display:flex;gap:12px;align-items:center;justify-content:center}
-    .logo{
-      width:46px;height:46px;border-radius:14px;
-      display:grid;place-items:center;
-      background:linear-gradient(135deg, rgba(255,122,24,.22), rgba(255,154,61,.10));
-      border:1px solid rgba(255,122,24,.35);
-      box-shadow:0 18px 55px rgba(255,122,24,.16);
-    }
-    .title{
-      font-size:42px;line-height:1.05;margin:0;font-weight:800;
-      letter-spacing:-0.02em;
-      background:linear-gradient(90deg, var(--orange), var(--orange2));
-      -webkit-background-clip:text;background-clip:text;color:transparent;
-      text-shadow:0 0 30px rgba(255,122,24,.06);
-    }
-    .subtitle{margin:0;color:var(--muted);font-size:14px}
-    .subsub{margin:0;color:rgba(154,167,189,.85);font-size:12px}
-    .panel{
-      border:1px solid rgba(255,122,24,.22);
-      background:linear-gradient(180deg, rgba(14,20,33,.85), rgba(12,16,26,.65));
-      box-shadow:0 24px 80px rgba(0,0,0,.45);
-      border-radius:18px;
-      padding:16px;
-      backdrop-filter: blur(10px);
-    }
-    .row{display:flex;gap:12px;flex-wrap:wrap}
-    .input{
-      flex:1;min-width:260px;
-      display:flex;gap:10px;align-items:center;
-      background:rgba(0,0,0,.25);
-      border:1px solid rgba(255,122,24,.25);
-      border-radius:14px;padding:12px 12px;
-    }
-    .input input{
-      width:100%;background:transparent;border:none;outline:none;color:var(--text);
-      font-size:14px;
-    }
-    .btn{
-      border:none;cursor:pointer;
-      border-radius:14px;
-      padding:12px 16px;
-      font-weight:700;
-      color:#101019;
-      background:linear-gradient(90deg, var(--orange), var(--orange2));
-      box-shadow:0 18px 45px rgba(255,122,24,.22);
-      transition:transform .12s ease, filter .12s ease;
-      display:flex;align-items:center;gap:10px;
-      white-space:nowrap;
-    }
-    .btn:hover{transform:translateY(-1px);filter:saturate(1.08)}
-    .btn:active{transform:translateY(0px)}
-    .notice{
-      margin-top:12px;
-      padding:12px 12px;border-radius:12px;
-      border:1px solid rgba(46,229,138,.25);
-      background:rgba(46,229,138,.08);
-      color:rgba(232,238,252,.92);
-      display:flex;gap:10px;align-items:flex-start;
-      font-size:13px;
-    }
-    .notice.warn{
-      border:1px solid rgba(255,77,77,.25);
-      background:rgba(255,77,77,.08);
-    }
-    .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
-    @media(max-width:980px){.grid4{grid-template-columns:repeat(2,1fr)}}
-    @media(max-width:520px){.grid4{grid-template-columns:1fr}}
-    .kpi{
-      border-radius:18px;padding:18px;
-      border:1px solid rgba(255,122,24,.18);
-      background:linear-gradient(180deg, rgba(15,22,36,.90), rgba(10,14,22,.70));
-      box-shadow:0 26px 70px rgba(0,0,0,.35);
-      position:relative;overflow:hidden;
-    }
-    .kpi:before{
-      content:"";
-      position:absolute;inset:-1px;
-      background:radial-gradient(420px 180px at 10% 0%, rgba(255,122,24,.18), transparent 65%);
-      pointer-events:none;
-    }
-    .kpi .label{position:relative;color:rgba(232,238,252,.78);font-size:12px}
-    .kpi .value{position:relative;font-size:30px;font-weight:800;margin-top:8px}
-    .kpi .sub{position:relative;color:var(--muted);font-size:12px;margin-top:6px}
-    .section{margin-top:18px}
-    .section h2{
-      display:flex;align-items:center;gap:10px;
-      margin:0 0 10px 0;
-      font-size:20px;letter-spacing:-0.01em
-    }
-    .card{
-      border-radius:18px;
-      border:1px solid rgba(255,122,24,.18);
-      background:linear-gradient(180deg, rgba(15,22,36,.90), rgba(10,14,22,.70));
-      box-shadow:0 26px 70px rgba(0,0,0,.35);
-      padding:16px;
-      overflow:hidden;
-    }
-    .gridCharts{display:grid;grid-template-columns:1.25fr .75fr;gap:14px}
-    @media(max-width:980px){.gridCharts{grid-template-columns:1fr}}
-    canvas{width:100% !important;height:260px !important}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:12px 10px;border-bottom:1px solid rgba(27,38,58,.9);font-size:13px}
-    th{color:rgba(232,238,252,.72);font-weight:700;text-align:left}
-    td{color:rgba(232,238,252,.92)}
-    .muted{color:var(--muted)}
-    .pill{display:inline-flex;gap:8px;align-items:center;padding:4px 10px;border-radius:999px;border:1px solid rgba(255,122,24,.22);background:rgba(255,122,24,.08);font-size:12px;color:rgba(232,238,252,.9)}
-    .posTitle{font-weight:700}
-    .posMeta{font-size:12px;color:rgba(154,167,189,.9);margin-top:4px}
-    .green{color:var(--green);font-weight:700}
-    .red{color:var(--red);font-weight:700}
-    .footer{margin-top:28px;text-align:center;color:rgba(154,167,189,.8);font-size:12px}
-    .tiny{font-size:11px;color:rgba(154,167,189,.78)}
-  </style>
+</style>
 </head>
 <body>
-  <div id="root"></div>
-
-  <!-- React -->
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-
-  <!-- Charts -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-
-  <!-- App -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" src="app.js"></script>
+    <div id="root"></div>
+    <script type="text/babel" src="./app.js"></script>
 </body>
 </html>
