@@ -87,7 +87,7 @@ function OpinionPortfolioTracker() {
     const address = (addressRaw || "").trim();
 
     if (!isValidEvmAddress(address)) {
-      setError("Будь ласка, введіть валідну EVM адресу (0x…40 символів)");
+      setError("Please enter a valid EVM address (0x + 40 hex characters)");
       setSuccess("");
       return;
     }
@@ -102,9 +102,12 @@ function OpinionPortfolioTracker() {
         `/api/positions?address=${encodeURIComponent(address)}&limit=50`
       );
       if (!posResponse.ok) {
-        throw new Error(
-          `Помилка позицій: ${posResponse.status} ${posResponse.statusText}`
-        );
+        if (posResponse.status === 401) {
+          throw new Error(
+            "API blocked (401). If this is Vercel Deployment Protection, disable it in Project Settings → Deployment Protection."
+          );
+        }
+        throw new Error(`Positions error: ${posResponse.status} ${posResponse.statusText}`);
       }
       const posData = await posResponse.json();
 
@@ -137,15 +140,15 @@ function OpinionPortfolioTracker() {
 
       if (posList.length) {
         await fetchMarketDetails(posList);
-        setSuccess(`✅ Завантажено ${posList.length} позицій`);
+        setSuccess(`✅ Loaded ${posList.length} positions`);
       } else {
-        setSuccess("✅ Дані завантажено (позицій немає)");
+        setSuccess("✅ Loaded (no positions found)");
       }
 
       setWalletAddress(address);
     } catch (err) {
       console.error(err);
-      setError(`❌ ${err?.message || "Помилка завантаження даних"}`);
+      setError(`❌ ${err?.message || "Failed to load data"}`);
       setPositions([]);
       setTrades([]);
       setMarkets({});
@@ -458,7 +461,7 @@ return (
                   <span className="text-sm opacity-80">Total Value</span>
                 </div>
                 <div className="text-3xl font-bold">{formatCurrency(stats.totalValue)}</div>
-                <div className="text-sm opacity-70 mt-1">{stats.activePositions} позицій</div>
+                <div className="text-sm opacity-70 mt-1">{stats.activePositions} positions</div>
               </div>
 
               <div
@@ -538,7 +541,7 @@ return (
                     {positions.length === 0 ? (
                       <tr>
                         <td colSpan="5" className="text-center py-8 text-gray-400">
-                          Немає позицій
+                          No positions
                         </td>
                       </tr>
                     ) : (
@@ -595,7 +598,7 @@ return (
                     {trades.length === 0 ? (
                       <tr>
                         <td colSpan="5" className="text-center py-8 text-gray-400">
-                          Немає трейдів (або API недоступний)
+                          No trades (або API недоступний)
                         </td>
                       </tr>
                     ) : (
