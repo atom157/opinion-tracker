@@ -1,504 +1,507 @@
-const { useState } = React;
+/* Opinion Portfolio Tracker (vanilla React + Chart.js) */
 
-function OpinionPortfolioTracker() {
-  const [walletAddress, setWalletAddress] = useState("");
-  const [inputAddress, setInputAddress] = useState("");
+const { useEffect, useMemo, useRef, useState } = React;
+
+function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
+
+function fmtUSD(n, digits=2){
+  const x = Number(n);
+  if (!isFinite(x)) return "$0.00";
+  const abs = Math.abs(x);
+  const d = abs >= 1000 ? 0 : digits;
+  return x.toLocaleString(undefined, { style:"currency", currency:"USD", minimumFractionDigits:d, maximumFractionDigits:d });
+}
+function fmtNum(n, digits=6){
+  const x = Number(n);
+  if (!isFinite(x)) return "0";
+  return x.toLocaleString(undefined, { minimumFractionDigits:0, maximumFractionDigits:digits });
+}
+
+function normalizeApi(json){
+  // Support both {errno, errmsg, result} and {code, msg, data}
+  if (!json || typeof json !== "object") return { ok:false, error:"Invalid response" };
+
+  if ("errno" in json){
+    return { ok: json.errno === 0, error: json.errmsg || json.error || "Request failed", result: json.result };
+  }
+  if ("code" in json){
+    return { ok: json.code === 0, error: json.msg || json.message || "Request failed", result: json.data || json.result };
+  }
+  // sometimes plain result
+  if ("result" in json) return { ok:true, result: json.result };
+  if ("data" in json) return { ok:true, result: json.data };
+  return { ok:true, result: json };
+}
+
+function safeArr(x){
+  if (!x) return [];
+  if (Array.isArray(x)) return x;
+  if (Array.isArray(x.list)) return x.list;
+  return [];
+}
+
+function detectTradeUSD(t){
+  // try common fields
+  const candidates = [
+    t.usdAmount, t.amountUsd, t.quoteAmountUsd, t.quoteAmountUSD,
+    t.quoteAmount, t.amount, t.size, t.value, t.totalValue, t.total, t.notional,
+    t.amountInQuoteToken, t.currentValueInQuoteToken
+  ];
+  for (const c of candidates){
+    const v = Number(c);
+    if (isFinite(v) && v !== 0) return Math.abs(v);
+  }
+  const shares = Number(t.shares || t.sharesOwned || t.amountShares);
+  const price = Number(t.price || t.avgPrice || t.avgEntryPrice);
+  if (isFinite(shares) && isFinite(price)) return Math.abs(shares * price);
+  return 0;
+}
+
+function detectTradePnlUSD(t){
+  const candidates = [t.pnl, t.profit, t.realizedPnl, t.realizedPnL, t.profitUsd, t.pnlUsd];
+  for (const c of candidates){
+    const v = Number(c);
+    if (isFinite(v) && v !== 0) return v;
+  }
+  return 0;
+}
+
+function parseTsToDateLabel(ts){
+  // ts may be seconds or ms, or ISO string
+  if (ts == null) return "";
+  if (typeof ts === "string" && ts.includes("-")){
+    const d = new Date(ts);
+    if (!isNaN(d.getTime())) return d.toLocaleDateString(undefined, { month:"short", day:"2-digit" });
+  }
+  const n = Number(ts);
+  if (!isFinite(n)) return "";
+  const ms = n > 1e12 ? n : n * 1000;
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month:"short", day:"2-digit" });
+}
+
+function classifyCategory(title){
+  const t = (title || "").toLowerCase();
+  if (/(fed|rate|cpi|inflation|gdp|unemployment|treasury|macro|etf|sec)\b/.test(t)) return "Macro";
+  if (/(election|president|parliament|vote|trump|biden|zelensky|putin|politic)\b/.test(t)) return "Politics";
+  if (/(nba|nfl|mlb|nhl|epl|ucl|world cup|match|game|score|team|goal|champion)\b/.test(t)) return "Sports";
+  if (/(btc|eth|sol|bnb|crypto|token|airdrop|fdv|tvl|market cap|binance|coinbase)\b/.test(t)) return "Crypto";
+  return "More";
+}
+
+function buildChart(ctx, config){
+  if (!ctx) return null;
+  return new Chart(ctx, config);
+}
+
+function OpinionPortfolioTracker(){
+  const [address, setAddress] = useState("0xf1168F1A131A510459222bA0680907369090DCE0");
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState(null); // {type:'ok'|'warn', text:''}
   const [positions, setPositions] = useState([]);
   const [trades, setTrades] = useState([]);
-  const [markets, setMarkets] = useState({});
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [stats, setStats] = useState({
-    totalValue: 0,
-    totalPnL: 0,
-    winRate: 0,
-    activePositions: 0,
-    totalTrades: 0,
-  });
+  const [marketCache, setMarketCache] = useState({}); // marketId -> market detail
 
-  const isValidEvmAddress = (a) => /^0x[a-fA-F0-9]{40}$/.test(a);
+  const volChartRef = useRef(null);
+  const sideChartRef = useRef(null);
+  const catChartRef = useRef(null);
 
-  const toNum = (v) => {
-    const n = parseFloat(v);
-    return Number.isFinite(n) ? n : 0;
-  };
+  const volChartInstance = useRef(null);
+  const sideChartInstance = useRef(null);
+  const catChartInstance = useRef(null);
 
-  const fetchMarketDetails = async (posList) => {
-    const ids = [...new Set(posList.map((p) => p.marketId).filter(Boolean))];
-    if (!ids.length) return;
+  const totals = useMemo(()=>{
+    const pos = positions || [];
+    const tr = trades || [];
 
-    const marketDetails = {};
-    // щоб не душити API
-    for (const id of ids.slice(0, 20)) {
-      try {
-        const r = await fetch(`/api/market?id=${id}`);
-        if (!r.ok) continue;
-        const d = await r.json();
-        if ((d.errno === 0 || d.code === 0) && d.result) {
-          marketDetails[id] = d.result;
-        }
-      } catch (e) {}
+    const netWorth = pos.reduce((a,p)=>a + (Number(p.currentValueInQuoteToken) || 0), 0);
+    const unreal = pos.reduce((a,p)=>a + (Number(p.unrealizedPnl) || 0), 0);
+
+    const volume = tr.reduce((a,t)=>a + detectTradeUSD(t), 0);
+
+    const realized = tr.reduce((a,t)=>a + detectTradePnlUSD(t), 0);
+    const totalPnl = unreal + realized;
+
+    const wins = tr.filter(t => detectTradePnlUSD(t) > 0).length;
+    const losses = tr.filter(t => detectTradePnlUSD(t) < 0).length;
+    const wr = (wins + losses) > 0 ? (wins / (wins + losses)) : 0;
+
+    return { netWorth, unreal, realized, totalPnl, volume, tradesCount: tr.length, winRate: wr };
+  }, [positions, trades]);
+
+  const chartsData = useMemo(()=>{
+    // Volume by day
+    const tr = trades || [];
+    const byDay = new Map();
+    let buy = 0, sell = 0;
+
+    for (const t of tr){
+      const dLabel = parseTsToDateLabel(t.createdAt ?? t.createTime ?? t.timestamp ?? t.time ?? t.blockTime ?? t.date);
+      const v = detectTradeUSD(t);
+      if (dLabel){
+        byDay.set(dLabel, (byDay.get(dLabel) || 0) + v);
+      }
+      const side = (t.sideEnum || t.side || "").toString().toLowerCase();
+      if (side.includes("buy")) buy += 1;
+      else if (side.includes("sell")) sell += 1;
     }
-    setMarkets(marketDetails);
-  };
 
-  const calculateStats = (posList, tradesList) => {
-    // Positions: беремо те, що реально приходить з API:
-    // currentValueInQuoteToken (USDT), unrealizedPnl, sharesOwned, avgEntryPrice
-    const totalValue = posList.reduce(
-      (s, p) => s + toNum(p.currentValueInQuoteToken),
-      0
-    );
-    const totalPnL = posList.reduce((s, p) => s + toNum(p.unrealizedPnl), 0);
-
-    // Trades: структура може відрізнятись — рахуємо winrate тільки якщо є pnl
-    let wins = 0,
-      losses = 0;
-    for (const t of tradesList) {
-      const pnl =
-        toNum(t.pnl) ||
-        toNum(t.realizedPnl) ||
-        toNum(t.realized_pnl) ||
-        0;
-      if (pnl > 0) wins++;
-      else if (pnl < 0) losses++;
-    }
-    const completed = wins + losses;
-
-    setStats({
-      totalValue,
-      totalPnL,
-      winRate: completed > 0 ? (wins / completed) * 100 : 0,
-      activePositions: posList.length,
-      totalTrades: tradesList.length,
+    // keep last ~14 labels in chronological order if possible
+    const labels = Array.from(byDay.keys());
+    // Try to sort by actual date parsing
+    labels.sort((a,b)=>{
+      const da = new Date(a);
+      const db = new Date(b);
+      if (!isNaN(da.getTime()) && !isNaN(db.getTime())) return da - db;
+      return a.localeCompare(b);
     });
-  };
+    const lastN = labels.slice(-14);
+    const vols = lastN.map(k => byDay.get(k) || 0);
 
-  const fetchData = async (addressRaw) => {
-    const address = (addressRaw || "").trim();
+    // Category distribution from positions (by value)
+    const cat = new Map();
+    for (const p of (positions || [])){
+      const title = p.rootMarketTitle || p.marketTitle || p.title || "";
+      const c = classifyCategory(title);
+      const v = Number(p.currentValueInQuoteToken) || 0;
+      cat.set(c, (cat.get(c) || 0) + v);
+    }
+    const catLabels = Array.from(cat.keys());
+    const catVals = catLabels.map(k => cat.get(k) || 0);
 
-    if (!isValidEvmAddress(address)) {
-      setError("Будь ласка, введіть валідну EVM адресу (0x…40 символів)");
-      setSuccess("");
+    return { vol:{labels:lastN, data:vols}, side:{buy,sell}, cat:{labels:catLabels, data:catVals} };
+  }, [trades, positions]);
+
+  function destroyCharts(){
+    for (const inst of [volChartInstance, sideChartInstance, catChartInstance]){
+      if (inst.current){
+        inst.current.destroy();
+        inst.current = null;
+      }
+    }
+  }
+
+  useEffect(()=>{
+    // Build / update charts
+    if (!window.Chart) return;
+
+    // Volume chart
+    const volCtx = volChartRef.current?.getContext("2d");
+    const sideCtx = sideChartRef.current?.getContext("2d");
+    const catCtx = catChartRef.current?.getContext("2d");
+
+    // Rebuild always (simple + stable)
+    destroyCharts();
+
+    if (volCtx){
+      volChartInstance.current = buildChart(volCtx, {
+        type: "bar",
+        data: {
+          labels: chartsData.vol.labels,
+          datasets: [{
+            label: "Volume (USD)",
+            data: chartsData.vol.data,
+            borderWidth: 0,
+            borderRadius: 8
+          }]
+        },
+        options: {
+          responsive:true,
+          maintainAspectRatio:false,
+          plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ label:(ctx)=>fmtUSD(ctx.raw) } } },
+          scales:{
+            x:{ ticks:{ color:"rgba(232,238,252,.7)" }, grid:{ color:"rgba(27,38,58,.35)" } },
+            y:{ ticks:{ color:"rgba(232,238,252,.7)", callback:(v)=> (v>=1000?("$"+(v/1000).toFixed(1)+"k"):"$"+v) }, grid:{ color:"rgba(27,38,58,.35)" } }
+          }
+        }
+      });
+    }
+
+    if (sideCtx){
+      sideChartInstance.current = buildChart(sideCtx, {
+        type:"doughnut",
+        data:{
+          labels:["Buy","Sell"],
+          datasets:[{ data:[chartsData.side.buy, chartsData.side.sell], borderWidth:0, hoverOffset:6 }]
+        },
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:"bottom", labels:{ color:"rgba(232,238,252,.8)" } } }
+        }
+      });
+    }
+
+    if (catCtx){
+      catChartInstance.current = buildChart(catCtx, {
+        type:"doughnut",
+        data:{
+          labels: chartsData.cat.labels.length ? chartsData.cat.labels : ["No data"],
+          datasets:[{ data: chartsData.cat.labels.length ? chartsData.cat.data : [1], borderWidth:0, hoverOffset:6 }]
+        },
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:"bottom", labels:{ color:"rgba(232,238,252,.8)" } },
+            tooltip:{ callbacks:{ label:(ctx)=> `${ctx.label}: ${fmtUSD(ctx.raw)}` } }
+          }
+        }
+      });
+    }
+  }, [chartsData]);
+
+  async function apiGet(url){
+    const r = await fetch(url, { headers:{ "Accept":"application/json" } });
+    const json = await r.json().catch(()=>null);
+    return normalizeApi(json);
+  }
+
+  async function loadPortfolio(){
+    const a = address.trim();
+    if (!/^0x[a-fA-F0-9]{40}$/.test(a)){
+      setNotice({ type:"warn", text:"Please enter a valid EVM address (0x…40 hex chars)." });
       return;
     }
 
     setLoading(true);
-    setError("");
-    setSuccess("");
+    setNotice(null);
 
-    try {
-      // Positions
-      const posResponse = await fetch(
-        `/api/positions?address=${encodeURIComponent(address)}&limit=50`
-      );
-      if (!posResponse.ok) {
-        throw new Error(
-          `Помилка позицій: ${posResponse.status} ${posResponse.statusText}`
-        );
-      }
-      const posData = await posResponse.json();
+    try{
+      const [posRes, tradeRes] = await Promise.all([
+        apiGet(`/api/positions?address=${encodeURIComponent(a)}`),
+        apiGet(`/api/trades?address=${encodeURIComponent(a)}`)
+      ]);
 
-      const posOk =
-        (posData.errno === 0 || posData.code === 0) && posData.result;
-      const posList = posOk ? posData.result.list || [] : [];
-
-      // Trades
-      const tradesResponse = await fetch(
-        `/api/trades?address=${encodeURIComponent(address)}&limit=100`
-      );
-      if (!tradesResponse.ok) {
-        // трейди можуть бути недоступні — не валимо весь дашборд
-        console.warn("Trades request failed:", tradesResponse.status);
-      }
-      let tradesData = null;
-      try {
-        tradesData = await tradesResponse.json();
-      } catch (e) {}
-
-      const tradesOk =
-        tradesData &&
-        (tradesData.errno === 0 || tradesData.code === 0) &&
-        tradesData.result;
-      const tradesList = tradesOk ? tradesData.result.list || [] : [];
-
-      setPositions(posList);
-      setTrades(tradesList);
-      calculateStats(posList, tradesList);
-
-      if (posList.length) {
-        await fetchMarketDetails(posList);
-        setSuccess(`✅ Завантажено ${posList.length} позицій`);
+      if (!posRes.ok){
+        setPositions([]);
+        setNotice({ type:"warn", text:`Positions request failed: ${posRes.error}` });
       } else {
-        setSuccess("✅ Дані завантажено (позицій немає)");
+        const list = safeArr(posRes.result);
+        setPositions(list);
       }
 
-      setWalletAddress(address);
-    } catch (err) {
-      console.error(err);
-      setError(`❌ ${err?.message || "Помилка завантаження даних"}`);
-      setPositions([]);
-      setTrades([]);
-      setMarkets({});
-      setStats({
-        totalValue: 0,
-        totalPnL: 0,
-        winRate: 0,
-        activePositions: 0,
-        totalTrades: 0,
-      });
-    } finally {
+      if (!tradeRes.ok){
+        setTrades([]);
+        setNotice({ type:"warn", text:`Trades request failed: ${tradeRes.error}` });
+      } else {
+        const list = safeArr(tradeRes.result);
+        setTrades(list);
+      }
+
+      if (posRes.ok && tradeRes.ok){
+        const count = safeArr(posRes.result).length;
+        setNotice({ type:"ok", text:`Loaded ${count} positions.` });
+      }
+    } catch (e){
+      setNotice({ type:"warn", text:`Unexpected error: ${e?.message || e}` });
+    } finally{
       setLoading(false);
     }
-  };
+  }
 
-  const formatCurrency = (value) =>
-    new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(toNum(value));
+  useEffect(()=>{
+    loadPortfolio();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const formatPercent = (value) =>
-    `${toNum(value) >= 0 ? "+" : ""}${toNum(value).toFixed(2)}%`;
+  const positionsTableRows = useMemo(()=>{
+    return (positions || []).map((p)=>{
+      const shares = Number(p.sharesOwned) || 0;
+      const avg = Number(p.avgEntryPrice) || 0;
+      const value = Number(p.currentValueInQuoteToken) || 0;
+      const upnl = Number(p.unrealizedPnl) || 0;
+      const upnlPct = Number(p.unrealizedPnlPercent) || 0;
+
+      const signClass = upnl >= 0 ? "green" : "red";
+      const pctText = isFinite(upnlPct) ? `${(upnlPct*100).toFixed(2)}%` : "—";
+
+      const meta = `${p.outcomeSideEnum || p.outcomeSide || ""} • ${p.marketStatusEnum || ""}`.trim();
+      const root = (p.rootMarketTitle || "").trim();
+
+      return (
+        <tr key={String(p.marketId) + String(p.tokenId || "")}>
+          <td>
+            <div className="posTitle">{p.marketTitle || p.title || `Market #${p.marketId}`}</div>
+            <div className="posMeta">
+              <span className="muted">{meta || "—"}</span>
+              {root ? <span className="muted"> • {root}</span> : null}
+            </div>
+          </td>
+          <td>{fmtNum(shares, 6)}</td>
+          <td>{avg ? `${avg.toFixed(5)} $` : "—"}</td>
+          <td>{fmtUSD(value)}</td>
+          <td className={signClass}>
+            {fmtUSD(upnl)} <span className="tiny">({pctText})</span>
+          </td>
+        </tr>
+      );
+    });
+  }, [positions]);
+
+  const tradesTableRows = useMemo(()=>{
+    const list = trades || [];
+    return list.slice(0, 30).map((t, idx)=>{
+      const date = parseTsToDateLabel(t.createdAt ?? t.createTime ?? t.timestamp ?? t.time ?? t.blockTime ?? t.date) || "—";
+      const side = (t.sideEnum || t.side || "—").toString();
+      const price = Number(t.price || t.avgPrice || t.avgEntryPrice);
+      const size = detectTradeUSD(t);
+      const pnl = detectTradePnlUSD(t);
+      const pnlCls = pnl > 0 ? "green" : (pnl < 0 ? "red" : "muted");
+
+      return (
+        <tr key={t.id || t.txHash || idx}>
+          <td>{date}</td>
+          <td>{side}</td>
+          <td>{isFinite(price) ? `${price.toFixed(5)} $` : "—"}</td>
+          <td>{size ? fmtUSD(size) : "—"}</td>
+          <td className={pnlCls}>{pnl ? fmtUSD(pnl) : "—"}</td>
+        </tr>
+      );
+    });
+  }, [trades]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="bg-gradient-to-br from-orange-500 to-orange-600 p-3 rounded-xl shadow-lg shadow-orange-500/50">
-              <svg
-                className="w-8 h-8 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <circle cx="12" cy="12" r="10" strokeWidth="2" />
-                <circle cx="12" cy="12" r="6" strokeWidth="2" />
-                <circle cx="12" cy="12" r="2" strokeWidth="2" />
-              </svg>
-            </div>
-            <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-orange-400 to-orange-600 bg-clip-text text-transparent">
-              Opinion Portfolio Tracker
-            </h1>
+    <div className="container">
+      <div className="hero">
+        <div className="brand">
+          <div className="logo" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2Z" stroke="rgba(255,122,24,.95)" strokeWidth="2"/>
+              <path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z" stroke="rgba(255,154,61,.95)" strokeWidth="2"/>
+              <path d="M12 10.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6Z" fill="rgba(232,238,252,.92)"/>
+            </svg>
           </div>
-          <p className="text-orange-200/80">
-            Відстежуйте свій портфоліо на Opinion Protocol
-          </p>
-          <p className="text-gray-400 text-sm mt-2">BNB Chain • Real-time Data</p>
+          <h1 className="title">Opinion Portfolio Tracker</h1>
+        </div>
+        <p className="subtitle">Track your Opinion Protocol portfolio on BNB Chain with real-time data.</p>
+        <p className="subsub">Powered by Opinion Protocol Open API</p>
+      </div>
+
+      <div className="panel">
+        <div className="row">
+          <div className="input" title="Wallet address">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M4 7h16v12H4V7Z" stroke="rgba(255,122,24,.85)" strokeWidth="2"/>
+              <path d="M4 7l2-3h14v3" stroke="rgba(255,154,61,.85)" strokeWidth="2"/>
+              <path d="M16 13h4" stroke="rgba(232,238,252,.8)" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+            <input
+              value={address}
+              onChange={(e)=>setAddress(e.target.value)}
+              placeholder="Enter wallet address (0x...)"
+              spellCheck="false"
+            />
+          </div>
+          <button className="btn" onClick={loadPortfolio} disabled={loading}>
+            <span aria-hidden="true">↻</span>
+            {loading ? "Loading..." : "Refresh portfolio"}
+          </button>
         </div>
 
-        {/* Wallet Input */}
-        <div className="bg-gradient-to-br from-gray-900 to-black backdrop-blur-lg rounded-2xl p-6 mb-8 border border-orange-500/30 shadow-xl shadow-orange-500/10">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1 relative">
-              <svg
-                className="absolute left-4 top-1/2 transform -translate-y-1/2 text-orange-400 w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <rect x="2" y="4" width="20" height="16" rx="2" strokeWidth="2" />
-                <path d="M2 10h20" strokeWidth="2" />
-              </svg>
-              <input
-                type="text"
-                value={inputAddress}
-                onChange={(e) => setInputAddress(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") fetchData(inputAddress);
-                }}
-                placeholder="Введіть адресу гаманця (0x...)"
-                className="w-full pl-12 pr-4 py-3 bg-black/50 border border-orange-500/50 rounded-xl text-white placeholder-orange-300/50 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
-                spellCheck="false"
-                autoCapitalize="off"
-                autoCorrect="off"
-              />
+        {notice ? (
+          <div className={`notice ${notice.type === "warn" ? "warn" : ""}`}>
+            <span aria-hidden="true">{notice.type === "warn" ? "⚠️" : "✅"}</span>
+            <div>{notice.text}</div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid4">
+        <div className="kpi">
+          <div className="label">Total net worth</div>
+          <div className="value">{fmtUSD(totals.netWorth)}</div>
+          <div className="sub">{positions.length} positions</div>
+        </div>
+        <div className="kpi">
+          <div className="label">Total PnL (est.)</div>
+          <div className={`value ${totals.totalPnl >= 0 ? "green" : "red"}`}>{fmtUSD(totals.totalPnl)}</div>
+          <div className="sub">Unrealized + realized (if available)</div>
+        </div>
+        <div className="kpi">
+          <div className="label">Total volume</div>
+          <div className="value">{fmtUSD(totals.volume)}</div>
+          <div className="sub">{totals.tradesCount} trades</div>
+        </div>
+        <div className="kpi">
+          <div className="label">Win rate</div>
+          <div className="value">{(totals.winRate*100).toFixed(1)}%</div>
+          <div className="sub">Based on realized trade PnL</div>
+        </div>
+      </div>
+
+      <div className="section">
+        <h2>
+          <span className="pill">Charts</span>
+          <span className="muted">Quick portfolio signals</span>
+        </h2>
+
+        <div className="gridCharts">
+          <div className="card">
+            <div className="muted" style={{fontSize:12, marginBottom:8}}>Volume (last 14 days)</div>
+            <canvas ref={volChartRef}></canvas>
+          </div>
+
+          <div style={{display:"grid", gap:14}}>
+            <div className="card">
+              <div className="muted" style={{fontSize:12, marginBottom:8}}>Trade sides</div>
+              <canvas ref={sideChartRef}></canvas>
             </div>
-            <button
-              onClick={() => fetchData(inputAddress)}
-              disabled={loading}
-              className="px-8 py-3 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 disabled:from-gray-600 disabled:to-gray-700 text-white rounded-xl font-medium transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-500/50 disabled:shadow-none"
-            >
-              {loading ? (
-                <>
-                  <svg
-                    className="w-5 h-5 animate-spin"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      d="M21 12a9 9 0 11-6.219-8.56"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                  Завантаження...
-                </>
-              ) : (
-                <>
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <polyline
-                      points="22 12 18 12 15 21 9 3 6 12 2 12"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  Переглянути портфоліо
-                </>
+            <div className="card">
+              <div className="muted" style={{fontSize:12, marginBottom:8}}>Position value by category</div>
+              <canvas ref={catChartRef}></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="section">
+        <h2><span className="pill">Positions</span><span className="muted">Your current positions</span></h2>
+        <div className="card">
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Shares</th>
+                <th>Avg entry</th>
+                <th>Value</th>
+                <th>Unrealized PnL</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positionsTableRows.length ? positionsTableRows : (
+                <tr><td colSpan="5" className="muted">No positions found.</td></tr>
               )}
-            </button>
-          </div>
-
-          {error && (
-            <div className="mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg flex items-start gap-3">
-              <svg
-                className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <circle cx="12" cy="12" r="10" strokeWidth="2" />
-                <line
-                  x1="12"
-                  y1="8"
-                  x2="12"
-                  y2="12"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-                <circle cx="12" cy="16" r="0.5" fill="currentColor" strokeWidth="1" />
-              </svg>
-              <span className="text-red-300">{error}</span>
-            </div>
-          )}
-
-          {success && !error && (
-            <div className="mt-4 p-4 bg-green-500/10 border border-green-500/30 rounded-lg flex items-start gap-3">
-              <svg
-                className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <circle cx="12" cy="12" r="10" strokeWidth="2" />
-                <polyline
-                  points="9 12 11 14 15 10"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              <span className="text-green-300">{success}</span>
-            </div>
-          )}
+            </tbody>
+          </table>
         </div>
+      </div>
 
-        {walletAddress && !loading && (
-          <>
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-              <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl p-6 text-white shadow-xl shadow-orange-500/30">
-                <div className="flex items-center justify-between mb-2">
-                  <svg className="w-8 h-8 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <line x1="12" y1="2" x2="12" y2="22" strokeWidth="2" strokeLinecap="round" />
-                    <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                  <span className="text-sm opacity-80">Загальна вартість</span>
-                </div>
-                <div className="text-3xl font-bold">{formatCurrency(stats.totalValue)}</div>
-                <div className="text-sm opacity-70 mt-1">{stats.activePositions} позицій</div>
-              </div>
-
-              <div
-                className={`bg-gradient-to-br ${
-                  stats.totalPnL >= 0 ? "from-green-500 to-green-600" : "from-red-500 to-red-600"
-                } rounded-2xl p-6 text-white shadow-xl`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <svg className="w-8 h-8 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <polyline
-                      points={stats.totalPnL >= 0 ? "23 6 13.5 15.5 8.5 10.5 1 18" : "23 18 13.5 8.5 8.5 13.5 1 6"}
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    <polyline
-                      points={stats.totalPnL >= 0 ? "17 6 23 6 23 12" : "17 18 23 18 23 12"}
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  <span className="text-sm opacity-80">Загальний PnL</span>
-                </div>
-                <div className="text-3xl font-bold">{formatCurrency(stats.totalPnL)}</div>
-                <div className="text-sm opacity-70 mt-1">
-                  {formatPercent(stats.totalValue > 0 ? (stats.totalPnL / stats.totalValue) * 100 : 0)}
-                </div>
-              </div>
-
-              <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-2xl p-6 text-white shadow-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <svg className="w-8 h-8 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10" strokeWidth="2" />
-                    <circle cx="12" cy="12" r="6" strokeWidth="2" />
-                    <circle cx="12" cy="12" r="2" strokeWidth="2" />
-                  </svg>
-                  <span className="text-sm opacity-80">Win Rate</span>
-                </div>
-                <div className="text-3xl font-bold">{stats.winRate.toFixed(1)}%</div>
-                <div className="text-sm opacity-70 mt-1">Успішність</div>
-              </div>
-
-              <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl p-6 text-white shadow-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <svg className="w-8 h-8 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <span className="text-sm opacity-80">Всього трейдів</span>
-                </div>
-                <div className="text-3xl font-bold">{stats.totalTrades}</div>
-                <div className="text-sm opacity-70 mt-1">Операцій</div>
-              </div>
-            </div>
-
-            {/* Positions Table */}
-            <div className="bg-gradient-to-br from-gray-900 to-black rounded-2xl p-6 border border-orange-500/20 shadow-xl mb-8">
-              <h3 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
-                <svg className="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                Позиції
-              </h3>
-
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-orange-500/20">
-                      <th className="text-left py-3 px-4 text-orange-200 font-semibold">Ринок</th>
-                      <th className="text-right py-3 px-4 text-orange-200 font-semibold">Shares</th>
-                      <th className="text-right py-3 px-4 text-orange-200 font-semibold">Avg entry</th>
-                      <th className="text-right py-3 px-4 text-orange-200 font-semibold">Value</th>
-                      <th className="text-right py-3 px-4 text-orange-200 font-semibold">Unrealized PnL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {positions.length === 0 ? (
-                      <tr>
-                        <td colSpan="5" className="text-center py-8 text-gray-400">
-                          Немає позицій
-                        </td>
-                      </tr>
-                    ) : (
-                      positions.map((pos, idx) => {
-                        const shares = toNum(pos.sharesOwned);
-                        const avgEntry = toNum(pos.avgEntryPrice);
-                        const value = toNum(pos.currentValueInQuoteToken);
-                        const pnl = toNum(pos.unrealizedPnl);
-                        const pnlPct = toNum(pos.unrealizedPnlPercent) * 100;
-
-                        const market = markets[pos.marketId];
-                        const marketTitle =
-                          market?.marketTitle || pos.marketTitle || `Market #${pos.marketId}`;
-
-                        return (
-                          <tr key={idx} className="border-b border-orange-500/10 hover:bg-orange-500/5 transition-colors">
-                            <td className="py-3 px-4 text-white max-w-xl">
-                              <div className="truncate">{marketTitle}</div>
-                              <div className="text-xs text-gray-400 mt-1">
-                                {pos.outcomeSideEnum || pos.outcome || "—"} • {pos.marketStatusEnum || "—"}
-                              </div>
-                            </td>
-                            <td className="text-right py-3 px-4 text-white">{shares.toFixed(6)}</td>
-                            <td className="text-right py-3 px-4 text-white">{avgEntry ? `${avgEntry.toFixed(5)} $` : "—"}</td>
-                            <td className="text-right py-3 px-4 text-white font-semibold">{formatCurrency(value)}</td>
-                            <td className={`text-right py-3 px-4 font-bold ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                              {formatCurrency(pnl)}
-                              <div className="text-xs opacity-70">{formatPercent(pnlPct)}</div>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Trades Table */}
-            <div className="bg-gradient-to-br from-gray-900 to-black rounded-2xl p-6 border border-orange-500/20 shadow-xl">
-              <h3 className="text-2xl font-bold text-white mb-4">Останні трейди</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-orange-500/20">
-                      <th className="text-left py-3 px-4 text-orange-200 font-semibold">Дата</th>
-                      <th className="text-left py-3 px-4 text-orange-200 font-semibold">Side</th>
-                      <th className="text-right py-3 px-4 text-orange-200 font-semibold">Price</th>
-                      <th className="text-right py-3 px-4 text-orange-200 font-semibold">Size</th>
-                      <th className="text-right py-3 px-4 text-orange-200 font-semibold">PnL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trades.length === 0 ? (
-                      <tr>
-                        <td colSpan="5" className="text-center py-8 text-gray-400">
-                          Немає трейдів (або API недоступний)
-                        </td>
-                      </tr>
-                    ) : (
-                      trades.slice(0, 20).map((t, idx) => {
-                        const pnl = toNum(t.pnl) || toNum(t.realizedPnl) || 0;
-                        const created = t.createdAt || t.created_at || t.time || Date.now();
-                        return (
-                          <tr key={idx} className="border-b border-orange-500/10 hover:bg-orange-500/5 transition-colors">
-                            <td className="py-3 px-4 text-white text-sm">
-                              {new Date(created).toLocaleString("uk-UA", {
-                                month: "short",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
-                            </td>
-                            <td className="py-3 px-4 text-white text-sm">{t.side || t.type || "—"}</td>
-                            <td className="text-right py-3 px-4 text-white">{t.price ? `${toNum(t.price).toFixed(5)} $` : "—"}</td>
-                            <td className="text-right py-3 px-4 text-white">{t.size ? toNum(t.size).toFixed(6) : "—"}</td>
-                            <td className={`text-right py-3 px-4 font-bold ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                              {pnl ? formatCurrency(pnl) : "—"}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Footer */}
-        <div className="mt-12 text-center text-gray-400 text-sm space-y-2">
-          <p className="text-orange-300/80">Powered by Opinion Protocol Open API</p>
-          <p>Created for Opinion Builders Program</p>
-          <p className="text-xs text-gray-500">BNB Chain • Real-time Market Data</p>
+      <div className="section">
+        <h2><span className="pill">Recent trades</span><span className="muted">Last 30 trades (if available)</span></h2>
+        <div className="card">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Side</th>
+                <th>Price</th>
+                <th>Size</th>
+                <th>PnL</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tradesTableRows.length ? tradesTableRows : (
+                <tr><td colSpan="5" className="muted">No trades found.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
+      </div>
+
+      <div className="footer">
+        Created for the Opinion Builders Program • <span className="tiny">Black + Orange UI inspired by Opinion</span>
       </div>
     </div>
   );
 }
 
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<OpinionPortfolioTracker />);
+ReactDOM.createRoot(document.getElementById("root")).render(<OpinionPortfolioTracker />);

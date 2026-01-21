@@ -1,13 +1,9 @@
 {
-  "name": "opinion-tracker",
+  "name": "opinion-portfolio-tracker",
   "version": "1.0.0",
-  "description": "Opinion Protocol Portfolio Tracker",
-  "main": "index.html",
-  "scripts": {
-    "dev": "vercel dev",
-    "deploy": "vercel --prod"
-  },
-  "keywords": ["opinion", "portfolio", "tracker", "bnb"],
-  "author": "",
-  "license": "MIT"
+  "private": true,
+  "description": "Opinion Portfolio Tracker (static + Vercel serverless API proxy)",
+  "engines": {
+    "node": ">=18"
+  }
 }
